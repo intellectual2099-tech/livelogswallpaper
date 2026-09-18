@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# GHOST OPS TERMINAL - live hacker log wallpaper
+# Usage:
+#   ./start-wall        -> set as desktop wallpaper (X11 session required)
+#   ./start-wall -p     -> preview as a normal window (works on Wayland too)
+set -e
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PIDFILE="$DIR/.wall.pid"
+
+usage() {
+    sed -n '2,3p' "$0"
+    exit 0
+}
+
+stop_wall() {
+    if [[ -f "$PIDFILE" ]]; then
+        kill "$(cat "$PIDFILE")" 2>/dev/null || true
+        rm -f "$PIDFILE"
+    fi
+    pkill -f "wall.py" 2>/dev/null || true
+    wait
+}
+
+case "${1:-}" in
+    stop|-s|--stop) stop_wall; exit 0 ;;
+    help|-h|--help) usage ;;
+esac
+
+stop_wall
+
+if [[ "$1" == "-p" || "$1" == "--preview" ]]; then
+    echo "[+] preview mode (normal window)"
+    exec python3 "$DIR/wall.py" --preview --size 1280x800
+fi
+
+SESSION_TYPE="${XDG_SESSION_TYPE:-}"
+
+if [[ "$SESSION_TYPE" == *wayland* ]] && ! command -v Xwayland >/dev/null 2>&1; then
+    echo "[!] Wayland session without Xwayland -- the wallpaper needs an X11 session."
+    echo "    Log out, pick 'GNOME' (Xorg) at the login screen, then rerun ./start-wall"
+    exit 1
+fi
+
+# detect resolution
+GEO="$(xrandr --current 2>/dev/null | awk -F'[ +]' '/ connected/{print $4; exit}')"
+if [[ -z "$GEO" ]]; then
+    GEO="$(xrandr --current 2>/dev/null | awk '/\*/{print $NF; exit}')"
+fi
+[[ "$GEO" =~ ^[0-9]+x[0-9]+$ ]] || GEO="1920x1080"
+echo "[+] wallpaper size: $GEO"
+
+XW="$(command -v xwinwrap || echo "$DIR/xwinwrap")"
+if [[ ! -x "$XW" ]]; then
+    echo "[!] xwinwrap not found. Build it: cd /tmp/opencode/xwinwrap && make"
+    echo "    or install: sudo apt install xwinwrap"
+    exit 1
+fi
+
+echo "[+] launching wallpaper (xwinwrap + wall.py)"
+setsid nohup "$XW" \
+    -fs -ni -b -nf -un -s -st -sp -argb \
+    -g "$GEO+0+0" \
+    -- python3 "$DIR/wall.py" --wid WID --size "$GEO" \
+    >> "$DIR/.wall.log" 2>&1 < /dev/null &
+echo $! > "$PIDFILE"
+sleep 1
+if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo "[+] wallpaper running (pid $(cat "$PIDFILE"))"
+    echo "    stop it anytime:  $DIR/start-wall stop"
+else
+    echo "[!] failed to start. check $DIR/.wall.log"
+    exit 1
+fi

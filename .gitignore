@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+build/
+dist/
+.wall.pid
+.wall.log
+*.spec
