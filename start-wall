@@ -42,13 +42,29 @@ if [[ "$SESSION_TYPE" == *wayland* ]] && ! command -v Xwayland >/dev/null 2>&1; 
     exit 1
 fi
 
-# detect resolution
-GEO="$(xrandr --current 2>/dev/null | awk -F'[ +]' '/ connected/{print $4; exit}')"
-if [[ -z "$GEO" ]]; then
-    GEO="$(xrandr --current 2>/dev/null | awk '/\*/{print $NF; exit}')"
+# Always detect the real screen size so the wallpaper matches the user's display,
+# whichever method the environment supports. Fallbacks are tried in order so this
+# works at login (xrandr may not be ready yet) and on minimal setups.
+detect_geo() {
+    local g
+    g="$(xrandr --current 2>/dev/null | awk -F'[ +]' '/ connected primary/{print $4; exit}')"
+    [[ "$g" =~ ^[0-9]+x[0-9]+$ ]] && { echo "$g"; return; }
+    g="$(xrandr --current 2>/dev/null | awk -F'[ +]' '/ connected/{print $4; exit}')"
+    [[ "$g" =~ ^[0-9]+x[0-9]+$ ]] && { echo "$g"; return; }
+    g="$(xwininfo -root 2>/dev/null | awk '/-geometry/{gsub(/\+.*/,"",$2); print $2; exit}')"
+    [[ "$g" =~ ^[0-9]+x[0-9]+$ ]] && { echo "$g"; return; }
+    g="$(xdpyinfo 2>/dev/null | awk '/dimensions:/{print $2"x"$6; exit}')"
+    [[ "$g" =~ ^[0-9]+x[0-9]+$ ]] && { echo "$g"; return; }
+    echo ""
+}
+GEO="$(detect_geo)"
+if [[ "$GEO" =~ ^[0-9]+x[0-9]+$ ]]; then
+    echo "[+] wallpaper size: $GEO"
+else
+    echo "[!] could not auto-detect screen size; defaulting to 1920x1080 (may be wrong for your display)"
+    GEO="1920x1080"
+    echo "[+] wallpaper size: $GEO (default)"
 fi
-[[ "$GEO" =~ ^[0-9]+x[0-9]+$ ]] || GEO="1920x1080"
-echo "[+] wallpaper size: $GEO"
 
 XW="$(command -v xwinwrap || echo "$DIR/xwinwrap")"
 if [[ ! -x "$XW" ]]; then
@@ -58,14 +74,39 @@ if [[ ! -x "$XW" ]]; then
 fi
 
 echo "[+] launching wallpaper (xwinwrap + wall.py)"
-setsid nohup "$XW" \
-    -fs -ni -b -nf -un -s -st -sp -argb \
-    -g "$GEO+0+0" \
-    -- python3 "$DIR/wall.py" --wid WID --size "$GEO" \
-    >> "$DIR/.wall.log" 2>&1 < /dev/null &
-echo $! > "$PIDFILE"
-sleep 1
-if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+WALL_OK=""
+for attempt in 1 2 3; do
+    stop_wall 2>/dev/null || true
+    sleep 0.5
+    setsid nohup "$XW" \
+        -ni -b -nf -un -s -st -sp -argb \
+        -g "$GEO+0+0" \
+        -- python3 "$DIR/wall.py" --wid WID --size "$GEO" \
+        >> "$DIR/.wall.log" 2>&1 < /dev/null &
+    echo $! > "$PIDFILE"
+    # tell KWin it's a *desktop* window: full-screen on the primary monitor,
+    # pinned behind everything. (Without this, KWin sizes/places it arbitrarily.)
+    WID=""
+    for _ in 1 2 3 4 5 6 7 8; do
+        WID="$(timeout 5 xwininfo -root -tree 2>/dev/null | grep 'GHOST OPS' | awk '{print $1}')"
+        [[ -n "$WID" ]] && break
+        sleep 1
+    done
+    if [[ -n "$WID" ]]; then
+        xprop -id "$WID" -f _NET_WM_WINDOW_TYPE 32a \
+            -set _NET_WM_WINDOW_TYPE _NET_WM_WINDOW_TYPE_DESKTOP \
+            && echo "[+] wallpaper on desktop layer" || true
+    fi
+    sleep 1
+    if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        WALL_OK=1
+        break
+    fi
+    echo "[!] attempt $attempt failed; retrying..."
+    rm -f "$PIDFILE"
+done
+
+if [[ -n "$WALL_OK" ]]; then
     echo "[+] wallpaper running (pid $(cat "$PIDFILE"))"
     echo "    stop it anytime:  $DIR/start-wall stop"
 else

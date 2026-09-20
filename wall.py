@@ -42,7 +42,7 @@ FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 if not os.path.exists(FONT_PATH):
     FONT_PATH = None
 
-WIDTH, HEIGHT = 1920, 1080
+WIDTH, HEIGHT = None, None
 if ARGS.size and "x" in ARGS.size:
     try:
         tw, th = ARGS.size.lower().split("x")[:2]
@@ -53,6 +53,18 @@ if ARGS.size and "x" in ARGS.size:
 pygame.init()
 if ARGS.wid:
     del os.environ["SDL_WINDOWID"]
+
+# No explicit --size: ask the display what the real screen size is so the
+# wallpaper always adapts to the user's display instead of guessing 1920x1080.
+if WIDTH is None:
+    try:
+        _info = pygame.display.Info()
+        if _info.current_w > 0 and _info.current_h > 0:
+            WIDTH, HEIGHT = _info.current_w, _info.current_h
+    except Exception:
+        pass
+if WIDTH is None:
+    WIDTH, HEIGHT = 1920, 1080
 
 if ARGS.wid:
     flags = pygame.NOFRAME
